@@ -1,0 +1,27 @@
+# dependencies
+/node_modules/
+
+# Next.js and test outputs
+/.next/
+/out/
+/coverage/
+/.vercel/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# local files and uploads
+/uploads/
+*.log
+*.tsbuildinfo
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# PDF quality-control renders
+/tmp/
