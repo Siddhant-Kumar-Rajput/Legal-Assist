@@ -120,4 +120,20 @@ describe("Gemini temporary-file boundary", () => {
       analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
     ).rejects.toMatchObject({ code: "AI_MODEL_UNAVAILABLE", status: 503 });
   });
+
+  it("classifies invalid structured-output and document requests", async () => {
+    mocks.upload.mockRejectedValueOnce(
+      Object.assign(new Error("Invalid JSON schema in response_format"), { status: 400 }),
+    );
+    await expect(
+      analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
+    ).rejects.toMatchObject({ code: "AI_SCHEMA_REJECTED", status: 502 });
+
+    mocks.upload.mockRejectedValueOnce(
+      Object.assign(new Error("Invalid document file URI"), { status: 400 }),
+    );
+    await expect(
+      analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
+    ).rejects.toMatchObject({ code: "AI_DOCUMENT_REJECTED", status: 502 });
+  });
 });

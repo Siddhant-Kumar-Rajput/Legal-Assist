@@ -170,6 +170,36 @@ function mapProviderError(error: unknown): never {
       "The configured Gemini model is unavailable to this API key.",
     );
   }
+  if (
+    status === 400 &&
+    (message.includes("response_format") ||
+      message.includes("response format") ||
+      message.includes("json schema") ||
+      message.includes("schema"))
+  ) {
+    throw new PublicApiError(
+      502,
+      "AI_SCHEMA_REJECTED",
+      "Gemini rejected the structured response format for this request.",
+    );
+  }
+  if (
+    status === 400 &&
+    (message.includes("file") || message.includes("document") || message.includes("uri"))
+  ) {
+    throw new PublicApiError(
+      502,
+      "AI_DOCUMENT_REJECTED",
+      "Gemini rejected the uploaded document reference.",
+    );
+  }
+  if (status === 400 && message.includes("model")) {
+    throw new PublicApiError(
+      503,
+      "AI_MODEL_UNAVAILABLE",
+      "The configured Gemini model cannot process this request.",
+    );
+  }
   if (status === 400 || message.includes("invalid argument")) {
     throw new PublicApiError(
       502,
