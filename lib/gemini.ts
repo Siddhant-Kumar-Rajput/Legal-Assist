@@ -29,6 +29,138 @@ function readOutputText(response: unknown): string {
   return text;
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function nullableText(value: unknown): string | null {
+  return textValue(value) ?? null;
+}
+
+function parseModelJson(text: string): unknown {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  return JSON.parse(cleaned);
+}
+
+function normalizeSeverity(value: unknown): "high" | "medium" | "low" {
+  const severity = textValue(value)?.toLowerCase();
+  if (severity === "high" || severity === "critical") return "high";
+  if (severity === "low") return "low";
+  return "medium";
+}
+
+function normalizeConfidence(value: unknown): number {
+  const confidence = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(confidence)) return 0.5;
+  return Math.max(0, Math.min(1, confidence > 1 ? confidence / 100 : confidence));
+}
+
+function normalizeExtractedAnalysis(value: unknown): unknown {
+  const root = asRecord(value);
+  const facts = asRecord(root.facts ?? root.contractFacts);
+  const risksValue = root.risks ?? root.riskItems;
+  const risks = Array.isArray(risksValue)
+    ? risksValue.flatMap((item, index) => {
+        const risk = asRecord(item);
+        const category = textValue(risk.category)?.toLowerCase().replaceAll("-", "_");
+        const quote = textValue(risk.quote ?? risk.exactQuote ?? risk.exact_quotation);
+        const title = textValue(risk.title);
+        const explanation = textValue(risk.explanation ?? risk.impact);
+        const idealRequest = textValue(risk.idealRequest ?? risk.ideal_request);
+        const fallback = textValue(risk.fallback ?? risk.fallbackPosition ?? risk.fallback_position);
+        const lawyerQuestion = textValue(risk.lawyerQuestion ?? risk.lawyer_question);
+        const page = Number(risk.page ?? risk.pageNumber ?? risk.page_number);
+
+        if (
+          !category ||
+          !quote ||
+          !title ||
+          !explanation ||
+          !idealRequest ||
+          !fallback ||
+          !lawyerQuestion ||
+          !Number.isInteger(page) ||
+          page < 1
+        ) {
+          return [];
+        }
+
+        return [{
+          id: textValue(risk.id) ?? `${category}-${index + 1}`,
+          category,
+          severity: normalizeSeverity(risk.severity),
+          confidence: normalizeConfidence(risk.confidence),
+          page,
+          quote,
+          title,
+          explanation,
+          idealRequest,
+          fallback,
+          lawyerQuestion,
+        }];
+      })
+    : [];
+
+  const missingValue = root.missingClauses ?? root.missing_clauses;
+  const missingClauses = Array.isArray(missingValue)
+    ? missingValue.flatMap((item) => {
+        const missing = textValue(item);
+        return missing ? [missing] : [];
+      })
+    : [];
+
+  return {
+    summary: textValue(root.summary) ?? "The contract was analyzed for negotiation-relevant terms.",
+    facts: {
+      freelancer: nullableText(facts.freelancer),
+      client: nullableText(facts.client),
+      effectiveDate: nullableText(facts.effectiveDate ?? facts.effective_date),
+      fees: nullableText(facts.fees),
+      paymentTerms: nullableText(facts.paymentTerms ?? facts.payment_terms),
+      term: nullableText(facts.term),
+      termination: nullableText(facts.termination),
+      governingLaw: nullableText(facts.governingLaw ?? facts.governing_law),
+      disputeForum: nullableText(facts.disputeForum ?? facts.dispute_forum),
+    },
+    risks,
+    missingClauses,
+  };
+}
+
+function normalizeDocumentAnswer(value: unknown): unknown {
+  const root = asRecord(value);
+  const evidenceValue = root.evidence ?? root.supportingEvidence ?? root.supporting_evidence;
+  const evidence = Array.isArray(evidenceValue)
+    ? evidenceValue.flatMap((item) => {
+        const entry = asRecord(item);
+        const quote = textValue(entry.quote ?? entry.exactQuote ?? entry.exact_quotation);
+        const page = Number(entry.page ?? entry.pageNumber ?? entry.page_number);
+        return quote && Number.isInteger(page) && page > 0 ? [{ page, quote }] : [];
+      })
+    : [];
+
+  const recommendLawyer = root.recommendLawyer ?? root.recommend_lawyer;
+  return {
+    answer: textValue(root.answer) ?? "",
+    evidence,
+    uncertainty: nullableText(root.uncertainty),
+    suggestedFollowUp: nullableText(root.suggestedFollowUp ?? root.suggested_follow_up),
+    recommendLawyer:
+      typeof recommendLawyer === "boolean"
+        ? recommendLawyer
+        : textValue(recommendLawyer)?.toLowerCase() === "true",
+  };
+}
+
 async function withInlinePdf<T>(
   bytes: Uint8Array,
   run: (client: GoogleGenAI, base64Pdf: string) => Promise<T>,
@@ -154,7 +286,9 @@ export async function analyzeWithGemini(
           responseMimeType: "application/json",
         },
       });
-      return extractedAnalysisSchema.parse(JSON.parse(readOutputText(response)));
+      return extractedAnalysisSchema.parse(
+        normalizeExtractedAnalysis(parseModelJson(readOutputText(response))),
+      );
     });
   } catch (error) {
     return mapProviderError(error);
@@ -182,7 +316,9 @@ export async function askWithGemini(
           responseMimeType: "application/json",
         },
       });
-      return documentAnswerSchema.parse(JSON.parse(readOutputText(response)));
+      return documentAnswerSchema.parse(
+        normalizeDocumentAnswer(parseModelJson(readOutputText(response))),
+      );
     });
   } catch (error) {
     return mapProviderError(error);

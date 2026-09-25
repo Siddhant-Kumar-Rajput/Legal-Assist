@@ -42,6 +42,44 @@ describe("Gemini inline-PDF boundary", () => {
     ).rejects.toMatchObject({ code: "INVALID_AI_RESPONSE", status: 502 });
   });
 
+  it("normalizes harmless Gemini JSON variations before strict validation", async () => {
+    const risk = sampleAnalysis.risks[0];
+    mocks.create.mockResolvedValue({
+      text: `\`\`\`json\n${JSON.stringify({
+        summary: sampleAnalysis.summary,
+        contractFacts: {
+          freelancer: sampleAnalysis.facts.freelancer,
+          client: sampleAnalysis.facts.client,
+          payment_terms: sampleAnalysis.facts.paymentTerms,
+        },
+        riskItems: [{
+          category: risk.category,
+          severity: risk.severity.toUpperCase(),
+          confidence: 99,
+          page_number: String(risk.page),
+          exact_quotation: risk.quote,
+          title: risk.title,
+          impact: risk.explanation,
+          ideal_request: risk.idealRequest,
+          fallback_position: risk.fallback,
+          lawyer_question: risk.lawyerQuestion,
+        }],
+        missing_clauses: sampleAnalysis.missingClauses,
+      })}\n\`\`\``,
+    });
+
+    const result = await analyzeWithGemini(
+      new Uint8Array([1, 2, 3]),
+      "test.pdf",
+      defaultContext,
+    );
+
+    expect(result.facts.effectiveDate).toBeNull();
+    expect(result.risks[0].confidence).toBe(0.99);
+    expect(result.risks[0].page).toBe(risk.page);
+    expect(result.risks[0].id).toBe(`${risk.category}-1`);
+  });
+
   it("maps provider quota failures to a safe public error", async () => {
     mocks.create.mockRejectedValue(new Error("429 quota exceeded for project secret-project-id"));
     await expect(
