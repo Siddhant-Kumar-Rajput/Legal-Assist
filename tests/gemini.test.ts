@@ -76,16 +76,13 @@ describe("Gemini temporary-file boundary", () => {
     expect(mocks.create).toHaveBeenCalledOnce();
   });
 
-  it("sends only Gemini-supported JSON schema keywords", async () => {
+  it("requests JSON output and validates it locally", async () => {
     mocks.create.mockResolvedValue({ text: JSON.stringify(sampleAnalysis) });
 
     await analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext);
 
     const request = mocks.create.mock.calls[0][0];
-    const serializedSchema = JSON.stringify(request.config.responseJsonSchema);
-    expect(serializedSchema).not.toContain("$schema");
-    expect(serializedSchema).not.toContain("minLength");
-    expect(serializedSchema).not.toContain("exclusiveMinimum");
+    expect(request.config).toEqual({ responseMimeType: "application/json" });
   });
 
   it("still deletes the file when model output cannot be verified", async () => {

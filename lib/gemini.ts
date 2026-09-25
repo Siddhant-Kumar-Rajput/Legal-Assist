@@ -46,28 +46,6 @@ async function waitForFileProcessing(client: GoogleGenAI, uploaded: GeminiFile):
   return { ...uploaded, ...file, uri: file.uri ?? uploaded.uri };
 }
 
-function toGeminiJsonSchema(schema: unknown): unknown {
-  if (Array.isArray(schema)) return schema.map(toGeminiJsonSchema);
-  if (!schema || typeof schema !== "object") return schema;
-
-  const unsupportedKeywords = new Set([
-    "$schema",
-    "exclusiveMaximum",
-    "exclusiveMinimum",
-    "maxLength",
-    "minLength",
-  ]);
-
-  return Object.fromEntries(
-    Object.entries(schema)
-      .filter(([key]) => !unsupportedKeywords.has(key))
-      .map(([key, value]) => [key, toGeminiJsonSchema(value)]),
-  );
-}
-
-const analysisJsonSchema = toGeminiJsonSchema(z.toJSONSchema(extractedAnalysisSchema));
-const answerJsonSchema = toGeminiJsonSchema(z.toJSONSchema(documentAnswerSchema));
-
 function getClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -225,7 +203,6 @@ export async function analyzeWithGemini(
         ]),
         config: {
           responseMimeType: "application/json",
-          responseJsonSchema: analysisJsonSchema,
         },
       });
       return extractedAnalysisSchema.parse(JSON.parse(readOutputText(response)));
@@ -251,7 +228,6 @@ export async function askWithGemini(
         ]),
         config: {
           responseMimeType: "application/json",
-          responseJsonSchema: answerJsonSchema,
         },
       });
       return documentAnswerSchema.parse(JSON.parse(readOutputText(response)));
