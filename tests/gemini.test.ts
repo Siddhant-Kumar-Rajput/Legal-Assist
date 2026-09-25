@@ -5,6 +5,7 @@ import { defaultContext } from "@/lib/schemas";
 
 const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
+  get: vi.fn(),
   remove: vi.fn(),
   create: vi.fn(),
 }));
@@ -12,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@google/genai", () => ({
   GoogleGenAI: vi.fn(function MockGoogleGenAI() {
     return {
-      files: { upload: mocks.upload, delete: mocks.remove },
+      files: { upload: mocks.upload, get: mocks.get, delete: mocks.remove },
       interactions: { create: mocks.create },
     };
   }),
@@ -28,6 +29,12 @@ describe("Gemini temporary-file boundary", () => {
       uri: "gemini://files/test",
       mimeType: "application/pdf",
     });
+    mocks.get.mockReset().mockResolvedValue({
+      name: "files/test",
+      uri: "gemini://files/test",
+      mimeType: "application/pdf",
+      state: "ACTIVE",
+    });
     mocks.remove.mockReset().mockResolvedValue(undefined);
     mocks.create.mockReset();
   });
@@ -40,6 +47,40 @@ describe("Gemini temporary-file boundary", () => {
       analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
     ).resolves.toEqual(sampleAnalysis);
     expect(mocks.remove).toHaveBeenCalledWith({ name: "files/test" });
+  });
+
+  it("waits for an uploaded PDF to become active before analysis", async () => {
+    mocks.get
+      .mockResolvedValueOnce({
+        name: "files/test",
+        uri: "gemini://files/test",
+        mimeType: "application/pdf",
+        state: "PROCESSING",
+      })
+      .mockResolvedValueOnce({
+        name: "files/test",
+        uri: "gemini://files/test",
+        mimeType: "application/pdf",
+        state: "ACTIVE",
+      });
+    mocks.create.mockResolvedValue({ output_text: JSON.stringify(sampleAnalysis) });
+
+    await analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext);
+
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+
+  it("sends only Gemini-supported JSON schema keywords", async () => {
+    mocks.create.mockResolvedValue({ output_text: JSON.stringify(sampleAnalysis) });
+
+    await analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext);
+
+    const request = mocks.create.mock.calls[0][0];
+    const serializedSchema = JSON.stringify(request.response_format.schema);
+    expect(serializedSchema).not.toContain("$schema");
+    expect(serializedSchema).not.toContain("minLength");
+    expect(serializedSchema).not.toContain("exclusiveMinimum");
   });
 
   it("still deletes the file when model output cannot be verified", async () => {

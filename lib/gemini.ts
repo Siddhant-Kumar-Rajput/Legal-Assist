@@ -10,7 +10,63 @@ import {
 import { analysisPrompt, questionPrompt } from "@/lib/prompts";
 import { PublicApiError } from "@/lib/pdf-validation";
 
-type GeminiFile = { name?: string; uri?: string; mimeType?: string; mime_type?: string };
+type GeminiFile = {
+  name?: string;
+  uri?: string;
+  mimeType?: string;
+  mime_type?: string;
+  state?: string;
+};
+
+const FILE_PROCESSING_TIMEOUT_MS = 20_000;
+const FILE_POLL_INTERVAL_MS = 750;
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForFileProcessing(client: GoogleGenAI, uploaded: GeminiFile): Promise<GeminiFile> {
+  if (!uploaded.name) return uploaded;
+
+  const deadline = Date.now() + FILE_PROCESSING_TIMEOUT_MS;
+  let file = (await client.files.get({ name: uploaded.name })) as GeminiFile;
+
+  while (file.state === "PROCESSING") {
+    if (Date.now() >= deadline) {
+      throw new Error("Gemini file processing deadline exceeded");
+    }
+    await sleep(FILE_POLL_INTERVAL_MS);
+    file = (await client.files.get({ name: uploaded.name })) as GeminiFile;
+  }
+
+  if (file.state === "FAILED") {
+    throw new Error("Gemini could not process the uploaded PDF");
+  }
+
+  return { ...uploaded, ...file, uri: file.uri ?? uploaded.uri };
+}
+
+function toGeminiJsonSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(toGeminiJsonSchema);
+  if (!schema || typeof schema !== "object") return schema;
+
+  const unsupportedKeywords = new Set([
+    "$schema",
+    "exclusiveMaximum",
+    "exclusiveMinimum",
+    "maxLength",
+    "minLength",
+  ]);
+
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => !unsupportedKeywords.has(key))
+      .map(([key, value]) => [key, toGeminiJsonSchema(value)]),
+  );
+}
+
+const analysisJsonSchema = toGeminiJsonSchema(z.toJSONSchema(extractedAnalysisSchema));
+const answerJsonSchema = toGeminiJsonSchema(z.toJSONSchema(documentAnswerSchema));
 
 function getClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -43,8 +99,9 @@ async function withTemporaryPdf<T>(
       file: new Blob([Buffer.from(bytes)], { type: "application/pdf" }),
       config: { displayName: filename, mimeType: "application/pdf" },
     });
-    if (!uploaded.uri) throw new Error("Gemini upload did not return a file URI");
-    return await run(client, uploaded as Required<Pick<GeminiFile, "uri">> & GeminiFile);
+    const readyFile = await waitForFileProcessing(client, uploaded);
+    if (!readyFile.uri) throw new Error("Gemini upload did not return a file URI");
+    return await run(client, readyFile as Required<Pick<GeminiFile, "uri">> & GeminiFile);
   } finally {
     if (uploaded?.name) {
       try {
@@ -91,7 +148,7 @@ export async function analyzeWithGemini(
         response_format: {
           type: "text",
           mime_type: "application/json",
-          schema: z.toJSONSchema(extractedAnalysisSchema),
+          schema: analysisJsonSchema,
         },
       });
       return extractedAnalysisSchema.parse(JSON.parse(readOutputText(interaction)));
@@ -118,7 +175,7 @@ export async function askWithGemini(
         response_format: {
           type: "text",
           mime_type: "application/json",
-          schema: z.toJSONSchema(documentAnswerSchema),
+          schema: answerJsonSchema,
         },
       });
       return documentAnswerSchema.parse(JSON.parse(readOutputText(interaction)));
