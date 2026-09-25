@@ -122,12 +122,60 @@ function mapProviderError(error: unknown): never {
       "The AI response could not be verified. Please try again.",
     );
   }
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
-  if (message.includes("quota") || message.includes("429")) {
+  const providerError = error as {
+    code?: number | string;
+    message?: string;
+    name?: string;
+    status?: number | string;
+  };
+  const message = providerError?.message?.toLowerCase() ?? "";
+  const status = Number(providerError?.status ?? providerError?.code);
+
+  // Keep provider details in server logs only. Do not log prompts, files, or credentials.
+  console.error("Gemini provider request failed", {
+    code: providerError?.code ?? null,
+    name: providerError?.name ?? null,
+    status: Number.isFinite(status) ? status : null,
+  });
+
+  if (status === 429 || message.includes("quota") || message.includes("429")) {
     throw new PublicApiError(429, "AI_QUOTA", "The AI service is busy or over quota. Try the sample or retry later.");
   }
   if (message.includes("timeout") || message.includes("deadline")) {
     throw new PublicApiError(504, "AI_TIMEOUT", "The document took too long to analyze. Please try again.");
+  }
+  if (
+    status === 401 ||
+    message.includes("api key not valid") ||
+    message.includes("api_key_invalid") ||
+    message.includes("unauthenticated")
+  ) {
+    throw new PublicApiError(
+      503,
+      "AI_AUTH_FAILED",
+      "The Gemini API key was rejected. Check the production environment variable and redeploy.",
+    );
+  }
+  if (status === 403 || message.includes("permission denied")) {
+    throw new PublicApiError(
+      503,
+      "AI_PERMISSION_DENIED",
+      "The Gemini project does not have permission for this request. Check API access and key restrictions.",
+    );
+  }
+  if (status === 404 || (message.includes("model") && message.includes("not found"))) {
+    throw new PublicApiError(
+      503,
+      "AI_MODEL_UNAVAILABLE",
+      "The configured Gemini model is unavailable to this API key.",
+    );
+  }
+  if (status === 400 || message.includes("invalid argument")) {
+    throw new PublicApiError(
+      502,
+      "AI_REQUEST_REJECTED",
+      "Gemini rejected the document request. Verify the configured model and try again.",
+    );
   }
   throw new PublicApiError(502, "AI_UNAVAILABLE", "Live analysis is temporarily unavailable.");
 }

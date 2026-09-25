@@ -98,4 +98,26 @@ describe("Gemini temporary-file boundary", () => {
     ).rejects.toMatchObject({ code: "AI_QUOTA", status: 429 });
     expect(mocks.remove).toHaveBeenCalledWith({ name: "files/test" });
   });
+
+  it("reports a rejected API key without exposing provider details", async () => {
+    mocks.upload.mockRejectedValue(
+      Object.assign(new Error("API key not valid: secret-provider-detail"), { status: 400 }),
+    );
+
+    await expect(
+      analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
+    ).rejects.toMatchObject({ code: "AI_AUTH_FAILED", status: 503 });
+  });
+
+  it("classifies permission and model-access failures", async () => {
+    mocks.upload.mockRejectedValueOnce(Object.assign(new Error("Permission denied"), { status: 403 }));
+    await expect(
+      analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
+    ).rejects.toMatchObject({ code: "AI_PERMISSION_DENIED", status: 503 });
+
+    mocks.upload.mockRejectedValueOnce(Object.assign(new Error("Model not found"), { status: 404 }));
+    await expect(
+      analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
+    ).rejects.toMatchObject({ code: "AI_MODEL_UNAVAILABLE", status: 503 });
+  });
 });
