@@ -36,22 +36,21 @@ Changing the user's priorities changes the order of the conversation without cha
 flowchart LR
     B[Browser memory] -->|PDF + context| A[Next.js API route]
     A --> V[Size, MIME, signature and page validation]
-    V --> G[Temporary Gemini Files upload]
-    G --> I[Gemini Interactions structured output]
+    V --> G[Inline PDF sent to Gemini generateContent]
+    G --> I[JSON response]
     I --> Z[Zod verification]
     Z --> R[Deterministic ranking]
     R --> B
-    I -. finally .-> D[Delete temporary Gemini file]
 ```
 
-There is no database, login, document-history feature, or analytics pipeline containing contract text. The selected PDF remains in browser memory so each Q&A request can upload it again; refreshing the page clears the session. Temporary Gemini deletion is attempted in a `finally` block after every request.
+There is no database, login, document-history feature, or analytics pipeline containing contract text. The selected PDF remains in browser memory and is sent inline to Gemini for each request; refreshing the page clears the session. NegoBrief does not create a persistent Gemini Files resource.
 
 ## Technology
 
 - Next.js 16 App Router and React 19
 - TypeScript with strict checking
 - Tailwind CSS 4 plus a custom responsive design system
-- Gemini `@google/genai` Interactions and Files APIs
+- Gemini `@google/genai` Generate Content API with inline PDF input
 - Zod schemas for every model and API boundary
 - PDF-lib for signature/page/encryption checks
 - GSAP with reduced-motion support

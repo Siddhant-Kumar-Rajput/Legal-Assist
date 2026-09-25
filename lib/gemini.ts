@@ -1,4 +1,4 @@
-import { createPartFromUri, createUserContent, GoogleGenAI } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import {
   documentAnswerSchema,
@@ -9,42 +9,6 @@ import {
 } from "@/lib/schemas";
 import { analysisPrompt, questionPrompt } from "@/lib/prompts";
 import { PublicApiError } from "@/lib/pdf-validation";
-
-type GeminiFile = {
-  name?: string;
-  uri?: string;
-  mimeType?: string;
-  mime_type?: string;
-  state?: string;
-};
-
-const FILE_PROCESSING_TIMEOUT_MS = 20_000;
-const FILE_POLL_INTERVAL_MS = 750;
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-async function waitForFileProcessing(client: GoogleGenAI, uploaded: GeminiFile): Promise<GeminiFile> {
-  if (!uploaded.name) return uploaded;
-
-  const deadline = Date.now() + FILE_PROCESSING_TIMEOUT_MS;
-  let file = (await client.files.get({ name: uploaded.name })) as GeminiFile;
-
-  while (file.state === "PROCESSING") {
-    if (Date.now() >= deadline) {
-      throw new Error("Gemini file processing deadline exceeded");
-    }
-    await sleep(FILE_POLL_INTERVAL_MS);
-    file = (await client.files.get({ name: uploaded.name })) as GeminiFile;
-  }
-
-  if (file.state === "FAILED") {
-    throw new Error("Gemini could not process the uploaded PDF");
-  }
-
-  return { ...uploaded, ...file, uri: file.uri ?? uploaded.uri };
-}
 
 function getClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -65,30 +29,12 @@ function readOutputText(response: unknown): string {
   return text;
 }
 
-async function withTemporaryPdf<T>(
+async function withInlinePdf<T>(
   bytes: Uint8Array,
-  filename: string,
-  run: (client: GoogleGenAI, file: Required<Pick<GeminiFile, "uri">> & GeminiFile) => Promise<T>,
+  run: (client: GoogleGenAI, base64Pdf: string) => Promise<T>,
 ): Promise<T> {
   const client = getClient();
-  let uploaded: GeminiFile | undefined;
-  try {
-    uploaded = await client.files.upload({
-      file: new Blob([Buffer.from(bytes)], { type: "application/pdf" }),
-      config: { displayName: filename, mimeType: "application/pdf" },
-    });
-    const readyFile = await waitForFileProcessing(client, uploaded);
-    if (!readyFile.uri) throw new Error("Gemini upload did not return a file URI");
-    return await run(client, readyFile as Required<Pick<GeminiFile, "uri">> & GeminiFile);
-  } finally {
-    if (uploaded?.name) {
-      try {
-        await client.files.delete({ name: uploaded.name });
-      } catch {
-        // Cleanup is best-effort. Gemini also expires uploaded files automatically.
-      }
-    }
-  }
+  return run(client, Buffer.from(bytes).toString("base64"));
 }
 
 function mapProviderError(error: unknown): never {
@@ -190,17 +136,20 @@ function mapProviderError(error: unknown): never {
 
 export async function analyzeWithGemini(
   bytes: Uint8Array,
-  filename: string,
+  _filename: string,
   context: UserContext,
 ): Promise<ExtractedAnalysis> {
   try {
-    return await withTemporaryPdf(bytes, filename, async (client, file) => {
+    return await withInlinePdf(bytes, async (client, base64Pdf) => {
       const response = await client.models.generateContent({
         model: process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
-        contents: createUserContent([
-          createPartFromUri(file.uri, file.mimeType ?? file.mime_type ?? "application/pdf"),
-          analysisPrompt(context),
-        ]),
+        contents: [{
+          role: "user",
+          parts: [
+            { inlineData: { data: base64Pdf, mimeType: "application/pdf" } },
+            { text: analysisPrompt(context) },
+          ],
+        }],
         config: {
           responseMimeType: "application/json",
         },
@@ -214,18 +163,21 @@ export async function analyzeWithGemini(
 
 export async function askWithGemini(
   bytes: Uint8Array,
-  filename: string,
+  _filename: string,
   question: string,
   context: UserContext,
 ): Promise<DocumentAnswer> {
   try {
-    return await withTemporaryPdf(bytes, filename, async (client, file) => {
+    return await withInlinePdf(bytes, async (client, base64Pdf) => {
       const response = await client.models.generateContent({
         model: process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
-        contents: createUserContent([
-          createPartFromUri(file.uri, file.mimeType ?? file.mime_type ?? "application/pdf"),
-          questionPrompt(question, context),
-        ]),
+        contents: [{
+          role: "user",
+          parts: [
+            { inlineData: { data: base64Pdf, mimeType: "application/pdf" } },
+            { text: questionPrompt(question, context) },
+          ],
+        }],
         config: {
           responseMimeType: "application/json",
         },
