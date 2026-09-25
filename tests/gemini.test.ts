@@ -11,10 +11,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@google/genai", () => ({
+  createPartFromUri: (uri: string, mimeType: string) => ({ fileData: { fileUri: uri, mimeType } }),
+  createUserContent: (parts: Array<string | object>) => ({
+    role: "user",
+    parts: parts.map((part) => (typeof part === "string" ? { text: part } : part)),
+  }),
   GoogleGenAI: vi.fn(function MockGoogleGenAI() {
     return {
       files: { upload: mocks.upload, get: mocks.get, delete: mocks.remove },
-      interactions: { create: mocks.create },
+      models: { generateContent: mocks.create },
     };
   }),
 }));
@@ -42,7 +47,7 @@ describe("Gemini temporary-file boundary", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("deletes the uploaded file after a valid structured response", async () => {
-    mocks.create.mockResolvedValue({ output_text: JSON.stringify(sampleAnalysis) });
+    mocks.create.mockResolvedValue({ text: JSON.stringify(sampleAnalysis) });
     await expect(
       analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
     ).resolves.toEqual(sampleAnalysis);
@@ -63,7 +68,7 @@ describe("Gemini temporary-file boundary", () => {
         mimeType: "application/pdf",
         state: "ACTIVE",
       });
-    mocks.create.mockResolvedValue({ output_text: JSON.stringify(sampleAnalysis) });
+    mocks.create.mockResolvedValue({ text: JSON.stringify(sampleAnalysis) });
 
     await analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext);
 
@@ -72,19 +77,19 @@ describe("Gemini temporary-file boundary", () => {
   });
 
   it("sends only Gemini-supported JSON schema keywords", async () => {
-    mocks.create.mockResolvedValue({ output_text: JSON.stringify(sampleAnalysis) });
+    mocks.create.mockResolvedValue({ text: JSON.stringify(sampleAnalysis) });
 
     await analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext);
 
     const request = mocks.create.mock.calls[0][0];
-    const serializedSchema = JSON.stringify(request.response_format.schema);
+    const serializedSchema = JSON.stringify(request.config.responseJsonSchema);
     expect(serializedSchema).not.toContain("$schema");
     expect(serializedSchema).not.toContain("minLength");
     expect(serializedSchema).not.toContain("exclusiveMinimum");
   });
 
   it("still deletes the file when model output cannot be verified", async () => {
-    mocks.create.mockResolvedValue({ output_text: "not-json" });
+    mocks.create.mockResolvedValue({ text: "not-json" });
     await expect(
       analyzeWithGemini(new Uint8Array([1, 2, 3]), "test.pdf", defaultContext),
     ).rejects.toMatchObject({ code: "INVALID_AI_RESPONSE", status: 502 });

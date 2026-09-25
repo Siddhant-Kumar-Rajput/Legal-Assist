@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { createPartFromUri, createUserContent, GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import {
   documentAnswerSchema,
@@ -80,9 +80,9 @@ function getClient(): GoogleGenAI {
   return new GoogleGenAI({ apiKey });
 }
 
-function readOutputText(interaction: unknown): string {
-  const value = interaction as { outputText?: string; output_text?: string };
-  const text = value.outputText ?? value.output_text;
+function readOutputText(response: unknown): string {
+  const value = response as { outputText?: string; output_text?: string; text?: string };
+  const text = value.text ?? value.outputText ?? value.output_text;
   if (!text) throw new Error("Gemini returned no output text");
   return text;
 }
@@ -217,19 +217,18 @@ export async function analyzeWithGemini(
 ): Promise<ExtractedAnalysis> {
   try {
     return await withTemporaryPdf(bytes, filename, async (client, file) => {
-      const interaction = await client.interactions.create({
+      const response = await client.models.generateContent({
         model: process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
-        input: [
-          { type: "document", uri: file.uri, mime_type: file.mimeType ?? file.mime_type ?? "application/pdf" },
-          { type: "text", text: analysisPrompt(context) },
-        ],
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
-          schema: analysisJsonSchema,
+        contents: createUserContent([
+          createPartFromUri(file.uri, file.mimeType ?? file.mime_type ?? "application/pdf"),
+          analysisPrompt(context),
+        ]),
+        config: {
+          responseMimeType: "application/json",
+          responseJsonSchema: analysisJsonSchema,
         },
       });
-      return extractedAnalysisSchema.parse(JSON.parse(readOutputText(interaction)));
+      return extractedAnalysisSchema.parse(JSON.parse(readOutputText(response)));
     });
   } catch (error) {
     return mapProviderError(error);
@@ -244,19 +243,18 @@ export async function askWithGemini(
 ): Promise<DocumentAnswer> {
   try {
     return await withTemporaryPdf(bytes, filename, async (client, file) => {
-      const interaction = await client.interactions.create({
+      const response = await client.models.generateContent({
         model: process.env.GEMINI_MODEL ?? "gemini-3.8-flash",
-        input: [
-          { type: "document", uri: file.uri, mime_type: file.mimeType ?? file.mime_type ?? "application/pdf" },
-          { type: "text", text: questionPrompt(question, context) },
-        ],
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
-          schema: answerJsonSchema,
+        contents: createUserContent([
+          createPartFromUri(file.uri, file.mimeType ?? file.mime_type ?? "application/pdf"),
+          questionPrompt(question, context),
+        ]),
+        config: {
+          responseMimeType: "application/json",
+          responseJsonSchema: answerJsonSchema,
         },
       });
-      return documentAnswerSchema.parse(JSON.parse(readOutputText(interaction)));
+      return documentAnswerSchema.parse(JSON.parse(readOutputText(response)));
     });
   } catch (error) {
     return mapProviderError(error);
